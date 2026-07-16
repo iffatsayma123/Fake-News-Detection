@@ -47,7 +47,7 @@ const Login = () => {
       <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-8 shadow-2xl">
         <div className="text-center mb-8">
           <FaShieldAlt className="text-cyan-400 text-5xl mx-auto mb-4" />
-          <h1 className="text-3xl font-bold">Welcome Back</h1>
+          <h1 className="text-3xl font-bold">Welcome</h1>
           <p className="text-slate-400 mt-2">
             Login to continue to TruthLens AI
           </p>
