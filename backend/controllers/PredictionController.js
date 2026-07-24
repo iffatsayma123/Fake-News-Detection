@@ -1,3 +1,4 @@
+import axios from "axios";
 import Prediction from "../models/Prediction.js";
 
 export const createPrediction = async (req, res) => {
@@ -11,21 +12,21 @@ export const createPrediction = async (req, res) => {
       });
     }
 
-    const randomConfidence = Number(
-      (80 + Math.random() * 19).toFixed(2)
-    );
+    const aiResponse = await axios.post("http://127.0.0.1:8000/predict", {
+      newsTitle: newsTitle.trim(),
+      newsText: newsText.trim(),
+    });
 
-    const temporaryPrediction =
-      Math.random() > 0.5 ? "Real" : "Fake";
+    const aiResult = aiResponse.data;
 
     const prediction = await Prediction.create({
       userId: req.user._id,
-      newsTitle,
-      newsText,
-      prediction: temporaryPrediction,
-      confidence: randomConfidence,
-      textConfidence: randomConfidence,
-      imageConfidence: 0,
+      newsTitle: newsTitle.trim(),
+      newsText: newsText.trim(),
+      prediction: aiResult.prediction,
+      confidence: aiResult.confidence,
+      textConfidence: aiResult.textConfidence,
+      imageConfidence: aiResult.imageConfidence,
     });
 
     return res.status(201).json({
@@ -34,11 +35,14 @@ export const createPrediction = async (req, res) => {
       prediction,
     });
   } catch (error) {
-    console.error("Prediction error:", error);
+    console.error(
+      "Prediction error:",
+      error.response?.data || error.message
+    );
 
     return res.status(500).json({
       success: false,
-      message: "Server error during prediction",
+      message: "AI service is unavailable or prediction failed",
     });
   }
 };
