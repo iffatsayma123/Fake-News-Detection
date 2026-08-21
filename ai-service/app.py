@@ -1,17 +1,18 @@
 import io
 import os
 
-import joblib
 import numpy as np
-import tensorflow as tf
-import torch
+import onnxruntime as ort
 
-from fastapi import FastAPI, UploadFile, File, Form
-from PIL import Image
-from transformers import (
-    AutoTokenizer,
-    AutoModelForSequenceClassification,
+from fastapi import (
+    FastAPI,
+    UploadFile,
+    File,
+    Form,
 )
+
+from PIL import Image
+from transformers import AutoTokenizer
 
 
 # ============================================================
@@ -20,8 +21,11 @@ from transformers import (
 
 app = FastAPI(
     title="TruthLens AI Service",
-    description="Multimodal fake news detection using BERT and EfficientNetB0",
-    version="2.2.0",
+    description=(
+        "Lightweight ONNX multimodal fake news "
+        "detection using BERT and EfficientNetB0"
+    ),
+    version="3.2.0",
 )
 
 
@@ -35,220 +39,342 @@ BASE_DIR = os.path.dirname(
 
 MODELS_DIR = os.path.join(
     BASE_DIR,
-    "models"
+    "models_onnx"
 )
 
-BERT_PATH = os.path.join(
+
+BERT_ONNX_PATH = os.path.join(
     MODELS_DIR,
-    "bert_text_model"
+    "bert_encoder_quantized.onnx"
 )
 
-EFFICIENTNET_PATH = os.path.join(
+EFFICIENTNET_ONNX_PATH = os.path.join(
     MODELS_DIR,
-    "efficientnet_final.keras"
+    "efficientnet_features.onnx"
 )
 
-FUSION_PATH = os.path.join(
+FUSION_ONNX_PATH = os.path.join(
     MODELS_DIR,
-    "multimodal_fusion_final.keras"
+    "fusion_model.onnx"
 )
 
 SCALER_PATH = os.path.join(
     MODELS_DIR,
-    "multimodal_scaler.pkl"
+    "multimodal_scaler.npz"
+)
+
+TOKENIZER_PATH = os.path.join(
+    MODELS_DIR,
+    "tokenizer"
 )
 
 
 # ============================================================
-# 3. DEVICE
+# 3. ONNX RUNTIME SETTINGS
 # ============================================================
 
-device = torch.device(
-    "cuda"
-    if torch.cuda.is_available()
-    else "cpu"
+providers = [
+    "CPUExecutionProvider"
+]
+
+
+session_options = ort.SessionOptions()
+
+# Reduce ONNX Runtime memory usage
+session_options.enable_cpu_mem_arena = False
+
+session_options.enable_mem_pattern = False
+
+
+# Suitable for single-user university demo usage
+session_options.intra_op_num_threads = 1
+
+session_options.inter_op_num_threads = 1
+
+
+# Sequential execution may reduce memory overhead
+session_options.execution_mode = (
+    ort.ExecutionMode.ORT_SEQUENTIAL
 )
 
-print("PyTorch device:", device)
+
+# Keep graph optimization enabled
+session_options.graph_optimization_level = (
+    ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+)
 
 
 # ============================================================
-# 4. LOAD BERT
+# 4. LOAD TOKENIZER
 # ============================================================
 
-print("Loading BERT tokenizer...")
+print(
+    "Loading BERT tokenizer..."
+)
 
-bert_tokenizer = AutoTokenizer.from_pretrained(
-    BERT_PATH,
+tokenizer = AutoTokenizer.from_pretrained(
+    TOKENIZER_PATH,
     local_files_only=True
 )
 
-
-print("Loading BERT classification model...")
-
-bert_classifier = (
-    AutoModelForSequenceClassification
-    .from_pretrained(
-        BERT_PATH,
-        local_files_only=True
-    )
-)
-
-bert_classifier.to(device)
-bert_classifier.eval()
-
-
-# Get the underlying BERT encoder.
-# This produces 768-dimensional text features.
-
-bert_model = bert_classifier.base_model
-
-bert_model.to(device)
-bert_model.eval()
-
-print("BERT loaded successfully.")
-
-
-# ============================================================
-# 5. LOAD EFFICIENTNET
-# ============================================================
-
-print("Loading EfficientNet model...")
-
-full_image_model = tf.keras.models.load_model(
-    EFFICIENTNET_PATH,
-    compile=False
+print(
+    "Tokenizer loaded successfully."
 )
 
 
-# Extract the 1280-dimensional image representation
-# used during multimodal fusion training.
+# ============================================================
+# 5. LOAD QUANTIZED BERT ONNX
+# ============================================================
 
-image_feature_model = tf.keras.Model(
-    inputs=full_image_model.input,
-    outputs=full_image_model.layers[-2].output
+print(
+    "Loading quantized BERT ONNX encoder..."
 )
 
-print("EfficientNet loaded successfully.")
-
-
-# ============================================================
-# 6. LOAD MULTIMODAL FUSION MODEL
-# ============================================================
-
-print("Loading multimodal fusion model...")
-
-fusion_model = tf.keras.models.load_model(
-    FUSION_PATH,
-    compile=False
+bert_session = ort.InferenceSession(
+    BERT_ONNX_PATH,
+    sess_options=session_options,
+    providers=providers
 )
 
-print("Fusion model loaded successfully.")
+print(
+    "BERT ONNX encoder loaded successfully."
+)
 
 
 # ============================================================
-# 7. LOAD STANDARD SCALER
+# 6. LOAD EFFICIENTNET ONNX
 # ============================================================
 
-print("Loading feature scaler...")
+print(
+    "Loading EfficientNet ONNX..."
+)
 
-scaler = joblib.load(
+image_session = ort.InferenceSession(
+    EFFICIENTNET_ONNX_PATH,
+    sess_options=session_options,
+    providers=providers
+)
+
+print(
+    "EfficientNet ONNX loaded successfully."
+)
+
+
+# ============================================================
+# 7. LOAD FUSION ONNX
+# ============================================================
+
+print(
+    "Loading fusion ONNX model..."
+)
+
+fusion_session = ort.InferenceSession(
+    FUSION_ONNX_PATH,
+    sess_options=session_options,
+    providers=providers
+)
+
+print(
+    "Fusion ONNX model loaded successfully."
+)
+
+
+# ============================================================
+# 8. LOAD LIGHTWEIGHT SCALER
+# ============================================================
+
+print(
+    "Loading lightweight scaler..."
+)
+
+scaler_data = np.load(
     SCALER_PATH
 )
 
-print("Scaler loaded successfully.")
+scaler_mean = (
+    scaler_data["mean"]
+    .astype(np.float32)
+)
+
+scaler_scale = (
+    scaler_data["scale"]
+    .astype(np.float32)
+)
+
+print(
+    "Lightweight scaler loaded successfully."
+)
 
 
 print("")
-print("==========================================")
-print("All TruthLens AI models loaded successfully!")
-print("==========================================")
+print(
+    "=============================================="
+)
+print(
+    "TruthLens lightweight ONNX models loaded!"
+)
+print(
+    "=============================================="
+)
 print("")
 
 
 # ============================================================
-# 8. TEXT FEATURE EXTRACTION
+# 9. TEXT FEATURE EXTRACTION
 # ============================================================
 
-def extract_text_features(text: str):
+def extract_text_features(
+    text: str
+):
 
-    encoded = bert_tokenizer(
-        [text],
-        padding=True,
+    encoded = tokenizer(
+        text,
+        return_tensors="np",
         truncation=True,
         max_length=128,
-        return_tensors="pt"
+        padding=True
     )
 
-    encoded = {
-        key: value.to(device)
-        for key, value in encoded.items()
-    }
 
-    with torch.no_grad():
+    input_ids = encoded[
+        "input_ids"
+    ].astype(
+        np.int64
+    )
 
-        outputs = bert_model(
-            **encoded
+
+    attention_mask = encoded[
+        "attention_mask"
+    ].astype(
+        np.int64
+    )
+
+
+    if (
+        "token_type_ids"
+        in encoded
+    ):
+
+        token_type_ids = encoded[
+            "token_type_ids"
+        ].astype(
+            np.int64
         )
 
-    # CLS representation
-    # Shape: (1, 768)
+    else:
 
-    cls_features = outputs.last_hidden_state[
-        :, 0, :
-    ]
+        token_type_ids = (
+            np.zeros_like(
+                input_ids,
+                dtype=np.int64
+            )
+        )
+
+
+    bert_inputs = {
+        "input_ids":
+            input_ids,
+
+        "attention_mask":
+            attention_mask,
+
+        "token_type_ids":
+            token_type_ids
+    }
+
+
+    outputs = bert_session.run(
+        None,
+        bert_inputs
+    )
+
+
+    last_hidden_state = (
+        outputs[0]
+    )
+
+
+    cls_features = (
+        last_hidden_state[
+            :, 0, :
+        ]
+    )
+
 
     return (
         cls_features
-        .cpu()
-        .numpy()
-        .astype(np.float32)
+        .astype(
+            np.float32
+        )
     )
 
 
 # ============================================================
-# 9. IMAGE FEATURE EXTRACTION
+# 10. IMAGE FEATURE EXTRACTION
 # ============================================================
 
-def extract_image_features(image_bytes: bytes):
+def extract_image_features(
+    image_bytes: bytes
+):
 
     image = Image.open(
-        io.BytesIO(image_bytes)
+        io.BytesIO(
+            image_bytes
+        )
     )
 
-    image = image.convert("RGB")
+
+    image = image.convert(
+        "RGB"
+    )
+
 
     image = image.resize(
         (224, 224)
     )
+
 
     image_array = np.asarray(
         image,
         dtype=np.float32
     )
 
-    # Add batch dimension:
-    # (224,224,3) -> (1,224,224,3)
 
     image_array = np.expand_dims(
         image_array,
         axis=0
     )
 
-    image_features = (
-        image_feature_model.predict(
-            image_array,
-            verbose=0
-        )
+
+    input_name = (
+        image_session
+        .get_inputs()[0]
+        .name
     )
 
-    return image_features.astype(
-        np.float32
+
+    outputs = image_session.run(
+        None,
+        {
+            input_name:
+                image_array
+        }
+    )
+
+
+    features = outputs[0]
+
+
+    return (
+        features
+        .astype(
+            np.float32
+        )
     )
 
 
 # ============================================================
-# 10. ROOT ENDPOINT
+# 11. ROOT ENDPOINT
 # ============================================================
 
 @app.get("/")
@@ -256,13 +382,17 @@ def root():
 
     return {
         "success": True,
-        "message": "TruthLens AI service is running",
-        "version": "2.2.0"
+        "message":
+            "TruthLens AI service is running",
+        "version":
+            "3.2.0",
+        "runtime":
+            "ONNX Runtime"
     }
 
 
 # ============================================================
-# 11. HEALTH ENDPOINT
+# 12. HEALTH ENDPOINT
 # ============================================================
 
 @app.get("/health")
@@ -270,17 +400,25 @@ def health_check():
 
     return {
         "success": True,
-        "status": "healthy",
-        "models_loaded": True,
-        "text_model": "BERT",
-        "image_model": "EfficientNetB0",
-        "fusion": "Feature Concatenation",
-        "device": str(device)
+        "status":
+            "healthy",
+        "models_loaded":
+            True,
+        "runtime":
+            "ONNX Runtime",
+        "text_model":
+            "Quantized BERT Encoder",
+        "image_model":
+            "Quantized EfficientNetB0 ONNX",
+        "fusion":
+            "Feature Concatenation + ONNX Classifier",
+        "scaler":
+            "NumPy"
     }
 
 
 # ============================================================
-# 12. MULTIMODAL PREDICTION ENDPOINT
+# 13. MULTIMODAL PREDICTION ENDPOINT
 # ============================================================
 
 @app.post("/predict")
@@ -293,73 +431,86 @@ async def predict_news(
     try:
 
         # ----------------------------------------------------
-        # TEXT
+        # TEXT INPUT
         # ----------------------------------------------------
 
-        # IMPORTANT:
-        # Our BERT model was trained using Fakeddit clean_title.
-        # Therefore, for the current trained model we use
-        # the submitted news title as the BERT input.
-        #
-        # We still receive newsText and save it in MongoDB,
-        # but it is not currently used by BERT inference.
+        # BERT was trained using Fakeddit clean_title,
+        # so title is used for text inference.
 
-        combined_text = newsTitle.strip()
+        text = newsTitle.strip()
 
-        if not combined_text:
+
+        if not text:
 
             return {
                 "success": False,
-                "message": "News title is required."
+                "message":
+                    "News title is required."
             }
 
 
-        text_features = extract_text_features(
-            combined_text
+        # ----------------------------------------------------
+        # BERT FEATURES
+        # ----------------------------------------------------
+
+        text_features = (
+            extract_text_features(
+                text
+            )
         )
 
 
+        if (
+            text_features.shape[1]
+            != 768
+        ):
+
+            raise ValueError(
+                "Unexpected BERT feature shape: "
+                f"{text_features.shape}"
+            )
+
+
         # ----------------------------------------------------
-        # IMAGE
+        # IMAGE INPUT
         # ----------------------------------------------------
 
         image_bytes = await image.read()
+
 
         if not image_bytes:
 
             return {
                 "success": False,
-                "message": "News image is required."
+                "message":
+                    "News image is required."
             }
 
 
-        image_features = extract_image_features(
-            image_bytes
+        # ----------------------------------------------------
+        # IMAGE FEATURES
+        # ----------------------------------------------------
+
+        image_features = (
+            extract_image_features(
+                image_bytes
+            )
         )
 
 
-        # ----------------------------------------------------
-        # VERIFY FEATURE DIMENSIONS
-        # ----------------------------------------------------
-
-        if text_features.shape[1] != 768:
-
-            raise ValueError(
-                "Unexpected BERT feature size: "
-                f"{text_features.shape}"
-            )
-
-
-        if image_features.shape[1] != 1280:
+        if (
+            image_features.shape[1]
+            != 1280
+        ):
 
             raise ValueError(
-                "Unexpected EfficientNet feature size: "
+                "Unexpected image feature shape: "
                 f"{image_features.shape}"
             )
 
 
         # ----------------------------------------------------
-        # MULTIMODAL FEATURE FUSION
+        # MULTIMODAL FEATURE CONCATENATION
         # ----------------------------------------------------
 
         fused_features = np.concatenate(
@@ -371,54 +522,84 @@ async def predict_news(
         )
 
 
-        # Expected:
-        # BERT = 768
-        # EfficientNet = 1280
-        # Total = 2048
-
-        if fused_features.shape[1] != 2048:
+        if (
+            fused_features.shape[1]
+            != 2048
+        ):
 
             raise ValueError(
-                "Unexpected fused feature size: "
+                "Unexpected fused feature shape: "
                 f"{fused_features.shape}"
             )
 
 
         # ----------------------------------------------------
-        # STANDARDIZATION
+        # LIGHTWEIGHT STANDARDIZATION
+        # ----------------------------------------------------
+        #
+        # Equivalent to:
+        #
+        # StandardScaler.transform()
+        #
+        # Formula:
+        #
+        # (x - mean) / scale
         # ----------------------------------------------------
 
-        fused_scaled = scaler.transform(
-            fused_features
+        fused_scaled = (
+            (
+                fused_features
+                -
+                scaler_mean
+            )
+            /
+            scaler_scale
+        ).astype(
+            np.float32
         )
 
 
         # ----------------------------------------------------
-        # FINAL MULTIMODAL CLASSIFIER
+        # FUSION CLASSIFIER
         # ----------------------------------------------------
 
-        probability = fusion_model.predict(
-            fused_scaled,
-            verbose=0
-        )[0][0]
+        fusion_input_name = (
+            fusion_session
+            .get_inputs()[0]
+            .name
+        )
+
+
+        fusion_outputs = (
+            fusion_session.run(
+                None,
+                {
+                    fusion_input_name:
+                        fused_scaled
+                }
+            )
+        )
+
 
         probability = float(
-            probability
+            np.asarray(
+                fusion_outputs[0]
+            ).reshape(-1)[0]
         )
 
 
-        # ====================================================
-        # FAKEDDIT BINARY LABEL MAPPING
-        # ====================================================
+        # ----------------------------------------------------
+        # LABEL MAPPING
+        # ----------------------------------------------------
         #
-        # Class 0 = Real / True
-        # Class 1 = Fake
+        # Fakeddit binary labels:
         #
-        # Sigmoid output = probability of Class 1.
+        # 0 = Real / True
+        # 1 = Fake
         #
-        # probability >= 0.5 -> Fake
-        # probability < 0.5  -> Real
-        # ====================================================
+        # Sigmoid output represents probability
+        # of Class 1 = Fake.
+        # ----------------------------------------------------
 
         if probability >= 0.5:
 
@@ -427,7 +608,8 @@ async def predict_news(
             prediction = "Fake"
 
             confidence = (
-                probability * 100
+                probability
+                * 100
             )
 
         else:
@@ -437,20 +619,20 @@ async def predict_news(
             prediction = "Real"
 
             confidence = (
-                (1 - probability) * 100
+                (1 - probability)
+                * 100
             )
 
 
-        # ----------------------------------------------------
-        # CLASS PROBABILITIES
-        # ----------------------------------------------------
-
         fake_probability = (
-            probability * 100
+            probability
+            * 100
         )
 
+
         real_probability = (
-            (1 - probability) * 100
+            (1 - probability)
+            * 100
         )
 
 
@@ -459,31 +641,45 @@ async def predict_news(
         # ----------------------------------------------------
 
         return {
-            "success": True,
+            "success":
+                True,
 
-            "prediction": prediction,
+            "prediction":
+                prediction,
 
-            "predictedClass": predicted_class,
+            "predictedClass":
+                predicted_class,
 
-            "confidence": round(
-                confidence,
-                2
-            ),
+            "confidence":
+                round(
+                    confidence,
+                    2
+                ),
 
-            "realProbability": round(
-                real_probability,
-                2
-            ),
+            "realProbability":
+                round(
+                    real_probability,
+                    2
+                ),
 
-            "fakeProbability": round(
-                fake_probability,
-                2
-            ),
+            "fakeProbability":
+                round(
+                    fake_probability,
+                    2
+                ),
 
             "models": {
-                "text": "BERT",
-                "image": "EfficientNetB0",
-                "fusion": "Feature Concatenation"
+                "text":
+                    "Quantized BERT ONNX",
+
+                "image":
+                    "Quantized EfficientNetB0 ONNX",
+
+                "fusion":
+                    "ONNX Feature Fusion",
+
+                "scaler":
+                    "NumPy Standardization"
             }
         }
 
@@ -495,8 +691,14 @@ async def predict_news(
             repr(error)
         )
 
+
         return {
-            "success": False,
-            "message": "Prediction failed",
-            "error": str(error)
+            "success":
+                False,
+
+            "message":
+                "Prediction failed",
+
+            "error":
+                str(error)
         }

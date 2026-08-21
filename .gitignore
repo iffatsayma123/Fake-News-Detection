@@ -99,3 +99,10 @@ models/*
 *.log
 tmp/
 temp/
+
+# Development / optimization helper files
+ai-service/convert_scaler.py
+ai-service/memory_test.py
+
+# Backup ONNX model
+ai-service/models_onnx/efficientnet_features_original.onnx
