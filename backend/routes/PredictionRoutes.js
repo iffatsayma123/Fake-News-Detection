@@ -7,7 +7,7 @@ import {
   getPredictionHistory,
   deletePrediction,
   clearPredictionHistory,
-} from "../controllers/predictionController.js";
+} from "../controllers/PredictionController.js";
 
 const router = express.Router();
 
