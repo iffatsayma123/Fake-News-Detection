@@ -1,19 +1,40 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
+
 import Home from "./pages/Home";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import DetectNews from "./pages/DetectNews";
 import History from "./pages/History";
+import Profile from "./pages/Profile";
+
 import ProtectedRoute from "./routes/ProtectedRoute";
+
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+
+        {/* PUBLIC ROUTES */}
+
+        <Route
+          path="/"
+          element={<Home />}
+        />
+
+        <Route
+          path="/login"
+          element={<Login />}
+        />
+
+        <Route
+          path="/register"
+          element={<Register />}
+        />
+
+
+        {/* DASHBOARD */}
 
         <Route
           path="/dashboard"
@@ -24,6 +45,9 @@ function App() {
           }
         />
 
+
+        {/* DETECT NEWS */}
+
         <Route
           path="/detect-news"
           element={
@@ -33,6 +57,9 @@ function App() {
           }
         />
 
+
+        {/* PREDICTION HISTORY */}
+
         <Route
           path="/history"
           element={
@@ -41,9 +68,23 @@ function App() {
             </ProtectedRoute>
           }
         />
+
+
+        {/* USER PROFILE */}
+
+        <Route
+          path="/profile"
+          element={
+            <ProtectedRoute>
+              <Profile />
+            </ProtectedRoute>
+          }
+        />
+
       </Routes>
     </BrowserRouter>
   );
 }
+
 
 export default App;
