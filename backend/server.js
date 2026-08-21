@@ -5,8 +5,7 @@ import cors from "cors";
 import mongoose from "mongoose";
 
 import authRoutes from "./routes/authRoutes.js";
-import PredictionRoutes from "./routes/PredictionRoutes.js";
-
+import predictionRoutes from "./routes/PredictionRoutes.js";
 
 const app = express();
 
