@@ -22,10 +22,10 @@ from transformers import AutoTokenizer
 app = FastAPI(
     title="TruthLens AI Service",
     description=(
-        "Lightweight ONNX multimodal fake news "
-        "detection using BERT and EfficientNetB0"
+        "Multimodal fake-news classification using "
+        "BERT V4 and EfficientNet V2"
     ),
-    version="3.3.0",
+    version="4.0.0",
 )
 
 
@@ -42,25 +42,14 @@ MODELS_DIR = os.path.join(
     "models_onnx"
 )
 
-
 BERT_ONNX_PATH = os.path.join(
     MODELS_DIR,
-    "bert_encoder_quantized.onnx"
+    "bert_v4_classifier_quint8.onnx"
 )
 
 EFFICIENTNET_ONNX_PATH = os.path.join(
     MODELS_DIR,
-    "efficientnet_features.onnx"
-)
-
-FUSION_ONNX_PATH = os.path.join(
-    MODELS_DIR,
-    "fusion_model.onnx"
-)
-
-SCALER_PATH = os.path.join(
-    MODELS_DIR,
-    "multimodal_scaler.npz"
+    "efficientnet_v2_classifier.onnx"
 )
 
 TOKENIZER_PATH = os.path.join(
@@ -70,65 +59,78 @@ TOKENIZER_PATH = os.path.join(
 
 
 # ============================================================
-# 3. ONNX RUNTIME SETTINGS
+# 3. SETTINGS
 # ============================================================
+
+MAX_LENGTH = 256
+
+TEXT_WEIGHT = 0.50
+IMAGE_WEIGHT = 0.50
 
 providers = [
     "CPUExecutionProvider"
 ]
 
 
+# ============================================================
+# 4. MEMORY-FRIENDLY ONNX OPTIONS
+# ============================================================
+
 session_options = ort.SessionOptions()
 
-# Reduce ONNX Runtime memory usage
 session_options.enable_cpu_mem_arena = False
-
 session_options.enable_mem_pattern = False
 
-
-# Suitable for a lightweight single-user university demo
 session_options.intra_op_num_threads = 1
-
 session_options.inter_op_num_threads = 1
 
-
-# Sequential execution reduces unnecessary memory overhead
 session_options.execution_mode = (
     ort.ExecutionMode.ORT_SEQUENTIAL
 )
 
-
-# Keep graph optimization enabled
 session_options.graph_optimization_level = (
     ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 )
 
 
 # ============================================================
-# 4. LOAD TOKENIZER
+# 5. VERIFY FILES
 # ============================================================
 
-print(
-    "Loading BERT tokenizer..."
-)
+required_paths = {
+    "BERT V4": BERT_ONNX_PATH,
+    "EfficientNet V2": EFFICIENTNET_ONNX_PATH,
+    "Tokenizer": TOKENIZER_PATH,
+}
+
+for name, path in required_paths.items():
+
+    if not os.path.exists(path):
+
+        raise FileNotFoundError(
+            f"{name} not found: {path}"
+        )
+
+
+# ============================================================
+# 6. LOAD TOKENIZER
+# ============================================================
+
+print("Loading BERT V4 tokenizer...")
 
 tokenizer = AutoTokenizer.from_pretrained(
     TOKENIZER_PATH,
     local_files_only=True
 )
 
-print(
-    "Tokenizer loaded successfully."
-)
+print("Tokenizer loaded.")
 
 
 # ============================================================
-# 5. LOAD QUANTIZED BERT ONNX
+# 7. LOAD BERT V4 QUINT8
 # ============================================================
 
-print(
-    "Loading quantized BERT ONNX encoder..."
-)
+print("Loading BERT V4 QUInt8...")
 
 bert_session = ort.InferenceSession(
     BERT_ONNX_PATH,
@@ -136,18 +138,14 @@ bert_session = ort.InferenceSession(
     providers=providers
 )
 
-print(
-    "BERT ONNX encoder loaded successfully."
-)
+print("BERT V4 loaded.")
 
 
 # ============================================================
-# 6. LOAD QUANTIZED EFFICIENTNET ONNX
+# 8. LOAD EFFICIENTNET V2
 # ============================================================
 
-print(
-    "Loading EfficientNet ONNX..."
-)
+print("Loading EfficientNet V2...")
 
 image_session = ort.InferenceSession(
     EFFICIENTNET_ONNX_PATH,
@@ -155,98 +153,75 @@ image_session = ort.InferenceSession(
     providers=providers
 )
 
-print(
-    "EfficientNet ONNX loaded successfully."
-)
-
-
-# ============================================================
-# 7. LOAD FUSION ONNX
-# ============================================================
-
-print(
-    "Loading fusion ONNX model..."
-)
-
-fusion_session = ort.InferenceSession(
-    FUSION_ONNX_PATH,
-    sess_options=session_options,
-    providers=providers
-)
-
-print(
-    "Fusion ONNX model loaded successfully."
-)
-
-
-# ============================================================
-# 8. LOAD LIGHTWEIGHT NUMPY SCALER
-# ============================================================
-
-print(
-    "Loading lightweight scaler..."
-)
-
-scaler_data = np.load(
-    SCALER_PATH
-)
-
-scaler_mean = (
-    scaler_data["mean"]
-    .astype(np.float32)
-)
-
-scaler_scale = (
-    scaler_data["scale"]
-    .astype(np.float32)
-)
-
-print(
-    "Lightweight scaler loaded successfully."
-)
+print("EfficientNet V2 loaded.")
 
 
 print("")
-print(
-    "=============================================="
-)
-print(
-    "TruthLens lightweight ONNX models loaded!"
-)
-print(
-    "=============================================="
-)
+print("=" * 55)
+print("TruthLens AI V4 models loaded successfully")
+print("=" * 55)
 print("")
 
 
 # ============================================================
-# 9. TEXT FEATURE EXTRACTION
+# 9. SOFTMAX
 # ============================================================
 
-def extract_text_features(
-    text: str
-):
+def softmax(logits):
+
+    logits = np.asarray(
+        logits,
+        dtype=np.float32
+    )
+
+    logits = (
+        logits
+        -
+        np.max(
+            logits,
+            axis=-1,
+            keepdims=True
+        )
+    )
+
+    exp_logits = np.exp(
+        logits
+    )
+
+    return (
+        exp_logits
+        /
+        np.sum(
+            exp_logits,
+            axis=-1,
+            keepdims=True
+        )
+    )
+
+
+# ============================================================
+# 10. TEXT PREDICTION
+# ============================================================
+
+def predict_text_probability(text):
 
     encoded = tokenizer(
         text,
         return_tensors="np",
         truncation=True,
-        max_length=128,
-        padding=True
+        padding="max_length",
+        max_length=MAX_LENGTH
     )
-
 
     input_ids = (
         encoded["input_ids"]
         .astype(np.int64)
     )
 
-
     attention_mask = (
         encoded["attention_mask"]
         .astype(np.int64)
     )
-
 
     if "token_type_ids" in encoded:
 
@@ -263,16 +238,32 @@ def extract_text_features(
         )
 
 
-    bert_inputs = {
-        "input_ids":
-            input_ids,
-
-        "attention_mask":
-            attention_mask,
-
-        "token_type_ids":
-            token_type_ids
+    available_inputs = {
+        item.name
+        for item
+        in bert_session.get_inputs()
     }
+
+
+    bert_inputs = {}
+
+    if "input_ids" in available_inputs:
+
+        bert_inputs["input_ids"] = (
+            input_ids
+        )
+
+    if "attention_mask" in available_inputs:
+
+        bert_inputs["attention_mask"] = (
+            attention_mask
+        )
+
+    if "token_type_ids" in available_inputs:
+
+        bert_inputs["token_type_ids"] = (
+            token_type_ids
+        )
 
 
     outputs = bert_session.run(
@@ -281,30 +272,41 @@ def extract_text_features(
     )
 
 
-    last_hidden_state = outputs[0]
-
-
-    # CLS token representation
-    # Shape = (1, 768)
-
-    cls_features = (
-        last_hidden_state[
-            :, 0, :
-        ]
+    logits = np.asarray(
+        outputs[0]
     )
 
 
-    return cls_features.astype(
-        np.float32
+    probabilities = softmax(
+        logits
+    )[0]
+
+
+    # V4 mapping:
+    # Class 0 = Fake
+    # Class 1 = Real
+
+    fake_probability = float(
+        probabilities[0]
+    )
+
+    real_probability = float(
+        probabilities[1]
+    )
+
+
+    return (
+        fake_probability,
+        real_probability
     )
 
 
 # ============================================================
-# 10. IMAGE FEATURE EXTRACTION
+# 11. IMAGE PREDICTION
 # ============================================================
 
-def extract_image_features(
-    image_bytes: bytes
+def predict_image_probability(
+    image_bytes
 ):
 
     image = Image.open(
@@ -313,11 +315,9 @@ def extract_image_features(
         )
     )
 
-
     image = image.convert(
         "RGB"
     )
-
 
     image = image.resize(
         (224, 224)
@@ -330,10 +330,9 @@ def extract_image_features(
     )
 
 
-    # Add batch dimension:
-    # (224, 224, 3)
-    # ->
-    # (1, 224, 224, 3)
+    # IMPORTANT:
+    # Keep the same preprocessing used by EfficientNet V2.
+    # Do not divide by 255 here.
 
     image_array = np.expand_dims(
         image_array,
@@ -341,35 +340,74 @@ def extract_image_features(
     )
 
 
-    input_name = (
+    image_input = (
         image_session
         .get_inputs()[0]
-        .name
     )
+
+
+    # Handle either NHWC or NCHW ONNX model.
+
+    shape = image_input.shape
+
+    if (
+        len(shape) == 4
+        and shape[1] == 3
+    ):
+
+        image_array = np.transpose(
+            image_array,
+            (0, 3, 1, 2)
+        )
 
 
     outputs = image_session.run(
         None,
         {
-            input_name:
+            image_input.name:
                 image_array
         }
     )
 
 
-    features = outputs[0]
+    output = np.asarray(
+        outputs[0]
+    )
 
 
-    # Expected shape:
-    # (1, 1280)
+    # EfficientNet V2:
+    # Class 1 = Real
+    # Class 0 = Fake
 
-    return features.astype(
-        np.float32
+    real_probability = float(
+        output.reshape(-1)[0]
+    )
+
+
+    real_probability = max(
+        0.0,
+        min(
+            1.0,
+            real_probability
+        )
+    )
+
+
+    fake_probability = (
+        1.0
+        -
+        real_probability
+    )
+
+
+    return (
+        fake_probability,
+        real_probability
     )
 
 
 # ============================================================
-# 11. ROOT ENDPOINT
+# 12. ROOT
 # ============================================================
 
 @app.get("/")
@@ -377,20 +415,15 @@ def root():
 
     return {
         "success": True,
-
         "message":
             "TruthLens AI service is running",
-
-        "version":
-            "3.3.0",
-
-        "runtime":
-            "ONNX Runtime"
+        "version": "4.0.0",
+        "runtime": "ONNX Runtime"
     }
 
 
 # ============================================================
-# 12. HEALTH ENDPOINT
+# 13. HEALTH
 # ============================================================
 
 @app.get("/health")
@@ -399,28 +432,29 @@ def health_check():
     return {
         "success": True,
 
-        "status":
-            "healthy",
+        "status": "healthy",
 
-        "models_loaded":
-            True,
+        "modelsLoaded": True,
 
         "runtime":
             "ONNX Runtime",
 
-        "text_model":
-            "Quantized BERT Encoder",
+        "textModel":
+            "BERT V4 QUInt8",
 
-        "image_model":
-            "Quantized EfficientNetB0 ONNX",
+        "imageModel":
+            "EfficientNet V2",
 
         "fusion":
-            "Feature Concatenation + ONNX Classifier",
+            "50/50 probability late fusion",
 
-        "scaler":
-            "NumPy",
+        "textWeight":
+            TEXT_WEIGHT,
 
-        "label_mapping": {
+        "imageWeight":
+            IMAGE_WEIGHT,
+
+        "labelMapping": {
             "0": "Fake",
             "1": "Real"
         }
@@ -428,246 +462,215 @@ def health_check():
 
 
 # ============================================================
-# 13. MULTIMODAL PREDICTION ENDPOINT
+# 14. PREDICT
 # ============================================================
 
 @app.post("/predict")
 async def predict_news(
-    newsTitle: str = Form(...),
-    newsText: str = Form(...),
-    image: UploadFile = File(...)
+
+    newsTitle: str = Form(""),
+
+    newsText: str = Form(""),
+
+    image: UploadFile | None = File(None)
+
 ):
 
     try:
 
-        # ----------------------------------------------------
-        # TEXT INPUT
-        # ----------------------------------------------------
-        #
-        # The BERT model was trained using Fakeddit
-        # clean_title.
-        #
-        # Therefore the current model uses the submitted
-        # news title for text feature extraction.
-        # ----------------------------------------------------
-
-        text = newsTitle.strip()
-
-
-        if not text:
-
-            return {
-                "success": False,
-                "message":
-                    "News title is required."
-            }
-
-
-        # ----------------------------------------------------
-        # BERT FEATURES
-        # ----------------------------------------------------
-
-        text_features = (
-            extract_text_features(
-                text
-            )
+        title = (
+            newsTitle.strip()
+            if newsTitle
+            else ""
         )
 
+        article = (
+            newsText.strip()
+            if newsText
+            else ""
+        )
+
+
+        # ====================================================
+        # BUILD TEXT INPUT
+        # ====================================================
+
+        if title and article:
+
+            model_text = (
+                title
+                +
+                " [SEP] "
+                +
+                article
+            )
+
+        elif title:
+
+            model_text = title
+
+        elif article:
+
+            model_text = article
+
+        else:
+
+            model_text = ""
+
+
+        has_text = bool(
+            model_text
+        )
+
+
+        # ====================================================
+        # IMAGE INPUT
+        # ====================================================
+
+        image_bytes = None
+
+        if image is not None:
+
+            image_bytes = (
+                await image.read()
+            )
+
+
+        has_image = bool(
+            image_bytes
+        )
+
+
+        # ====================================================
+        # REQUIRE AT LEAST ONE MODALITY
+        # ====================================================
 
         if (
-            text_features.shape[1]
-            != 768
+            not has_text
+            and not has_image
         ):
-
-            raise ValueError(
-                "Unexpected BERT feature shape: "
-                f"{text_features.shape}"
-            )
-
-
-        # ----------------------------------------------------
-        # IMAGE INPUT
-        # ----------------------------------------------------
-
-        image_bytes = (
-            await image.read()
-        )
-
-
-        if not image_bytes:
 
             return {
                 "success": False,
+
                 "message":
-                    "News image is required."
+                    "Please provide news text, "
+                    "a title, or an image."
             }
 
 
-        # ----------------------------------------------------
-        # EFFICIENTNET FEATURES
-        # ----------------------------------------------------
+        # ====================================================
+        # TEXT MODEL
+        # ====================================================
 
-        image_features = (
-            extract_image_features(
+        text_fake = None
+        text_real = None
+
+        if has_text:
+
+            (
+                text_fake,
+                text_real
+            ) = predict_text_probability(
+                model_text
+            )
+
+
+        # ====================================================
+        # IMAGE MODEL
+        # ====================================================
+
+        image_fake = None
+        image_real = None
+
+        if has_image:
+
+            (
+                image_fake,
+                image_real
+            ) = predict_image_probability(
                 image_bytes
             )
-        )
 
 
-        if (
-            image_features.shape[1]
-            != 1280
-        ):
-
-            raise ValueError(
-                "Unexpected image feature shape: "
-                f"{image_features.shape}"
-            )
-
-
-        # ----------------------------------------------------
-        # FEATURE CONCATENATION
-        # ----------------------------------------------------
-        #
-        # BERT:
-        # 768 features
-        #
-        # EfficientNetB0:
-        # 1280 features
-        #
-        # Total:
-        # 2048 features
-        # ----------------------------------------------------
-
-        fused_features = np.concatenate(
-            [
-                text_features,
-                image_features
-            ],
-            axis=1
-        )
-
+        # ====================================================
+        # FINAL PROBABILITY
+        # ====================================================
 
         if (
-            fused_features.shape[1]
-            != 2048
+            has_text
+            and has_image
         ):
 
-            raise ValueError(
-                "Unexpected fused feature shape: "
-                f"{fused_features.shape}"
+            final_real = (
+                TEXT_WEIGHT
+                *
+                text_real
+                +
+                IMAGE_WEIGHT
+                *
+                image_real
             )
 
+            mode = "multimodal"
 
-        # ----------------------------------------------------
-        # NUMPY STANDARDIZATION
-        # ----------------------------------------------------
-        #
-        # This reproduces:
-        #
-        # StandardScaler.transform()
-        #
-        # Formula:
-        #
-        # (x - mean) / scale
-        # ----------------------------------------------------
 
-        fused_scaled = (
-            (
-                fused_features
-                -
-                scaler_mean
+        elif has_text:
+
+            final_real = (
+                text_real
             )
-            /
-            scaler_scale
-        ).astype(
-            np.float32
-        )
+
+            mode = "text-only"
 
 
-        # ----------------------------------------------------
-        # FINAL FUSION CLASSIFIER
-        # ----------------------------------------------------
+        else:
 
-        fusion_input_name = (
-            fusion_session
-            .get_inputs()[0]
-            .name
-        )
-
-
-        fusion_outputs = (
-            fusion_session.run(
-                None,
-                {
-                    fusion_input_name:
-                        fused_scaled
-                }
+            final_real = (
+                image_real
             )
-        )
+
+            mode = "image-only"
 
 
-        probability = float(
-            np.asarray(
-                fusion_outputs[0]
-            ).reshape(-1)[0]
-        )
-
-
-        # ----------------------------------------------------
-        # SAFETY CHECK
-        # ----------------------------------------------------
-
-        probability = max(
+        final_real = max(
             0.0,
             min(
                 1.0,
-                probability
+                float(
+                    final_real
+                )
             )
         )
 
 
-        # ====================================================
-        # CORRECT FAKEDDIT BINARY LABEL MAPPING
-        # ====================================================
-        #
-        # Class 0 = Fake / False
-        #
-        # Class 1 = Real / True
-        #
-        # The fusion model uses a single sigmoid output.
-        #
-        # Therefore:
-        #
-        # probability = probability of Class 1
-        #             = probability of REAL
-        #
-        # >= 0.5 -> Real
-        #
-        # < 0.5  -> Fake
-        # ====================================================
-
-
-        real_probability = (
-            probability
-            * 100
+        final_fake = (
+            1.0
+            -
+            final_real
         )
 
 
-        fake_probability = (
-            (1 - probability)
-            * 100
-        )
+        # ====================================================
+        # CLASSIFICATION
+        #
+        # IMPORTANT:
+        # prediction = Real/Fake for frontend compatibility
+        # display_prediction = human-friendly wording
+        # ====================================================
 
-
-        if probability >= 0.5:
+        if final_real >= 0.5:
 
             predicted_class = 1
 
             prediction = "Real"
 
+            display_prediction = (
+                "Likely Real"
+            )
+
             confidence = (
-                real_probability
+                final_real
             )
 
         else:
@@ -676,35 +679,82 @@ async def predict_news(
 
             prediction = "Fake"
 
+            display_prediction = (
+                "Likely Fake"
+            )
+
             confidence = (
-                fake_probability
+                final_fake
             )
 
 
-        # ----------------------------------------------------
-        # DEBUG INFORMATION
-        # ----------------------------------------------------
-        #
-        # This prints the raw sigmoid value in the server
-        # terminal. It is useful while we verify the corrected
-        # label mapping.
-        # ----------------------------------------------------
+        # ====================================================
+        # UNCERTAINTY FLAG
+        # ====================================================
+
+        needs_verification = (
+            0.40
+            <=
+            final_real
+            <=
+            0.60
+        )
+
+
+        # ====================================================
+        # DEBUG OUTPUT
+        # ====================================================
 
         print("")
+        print("=" * 55)
+
         print(
-            "======================================"
+            "TruthLens AI V4 Prediction"
         )
 
         print(
-            "TruthLens Prediction"
+            "Mode:",
+            mode
         )
 
-        print(
-            "Raw sigmoid probability:",
-            round(
-                probability,
-                6
+        if text_real is not None:
+
+            print(
+                "Text Real:",
+                round(
+                    text_real * 100,
+                    2
+                ),
+                "%"
             )
+
+        if image_real is not None:
+
+            print(
+                "Image Real:",
+                round(
+                    image_real * 100,
+                    2
+                ),
+                "%"
+            )
+
+        print(
+            "Final Real:",
+            round(
+                final_real * 100,
+                2
+            ),
+            "%"
+        )
+
+        print(
+            "Final Fake:",
+            round(
+                final_fake * 100,
+                2
+            ),
+            "%"
         )
 
         print(
@@ -713,83 +763,132 @@ async def predict_news(
         )
 
         print(
-            "Real score:",
-            round(
-                real_probability,
-                2
-            )
+            "Display Prediction:",
+            display_prediction
         )
 
         print(
-            "Fake score:",
-            round(
-                fake_probability,
-                2
-            )
+            "Needs Verification:",
+            needs_verification
         )
 
-        print(
-            "======================================"
-        )
+        print("=" * 55)
         print("")
 
 
-        # ----------------------------------------------------
+        # ====================================================
         # API RESPONSE
-        # ----------------------------------------------------
+        # ====================================================
 
-        return {
+        response = {
+
             "success":
                 True,
 
+            # Keep this Real/Fake for existing frontend
             "prediction":
                 prediction,
+
+            # Human-friendly label
+            "displayPrediction":
+                display_prediction,
 
             "predictedClass":
                 predicted_class,
 
             "confidence":
                 round(
-                    confidence,
+                    confidence * 100,
                     2
                 ),
 
             "realProbability":
                 round(
-                    real_probability,
+                    final_real * 100,
                     2
                 ),
 
             "fakeProbability":
                 round(
-                    fake_probability,
+                    final_fake * 100,
                     2
                 ),
+
+            "needsVerification":
+                needs_verification,
+
+            "mode":
+                mode,
 
             "models": {
 
                 "text":
-                    "Quantized BERT ONNX",
+                    "BERT V4 QUInt8",
 
                 "image":
-                    "Quantized EfficientNetB0 ONNX",
+                    "EfficientNet V2",
 
                 "fusion":
-                    "ONNX Feature Fusion",
-
-                "scaler":
-                    "NumPy Standardization"
+                    (
+                        "50/50 late fusion"
+                        if mode
+                        ==
+                        "multimodal"
+                        else
+                        "Single modality"
+                    )
             },
 
             "labelMapping": {
-
-                "0":
-                    "Fake",
-
-                "1":
-                    "Real"
+                "0": "Fake",
+                "1": "Real"
             }
         }
+
+
+        # ====================================================
+        # OPTIONAL TEXT MODEL SCORES
+        # ====================================================
+
+        if text_real is not None:
+
+            response[
+                "textRealProbability"
+            ] = round(
+                text_real * 100,
+                2
+            )
+
+            response[
+                "textFakeProbability"
+            ] = round(
+                text_fake * 100,
+                2
+            )
+
+
+        # ====================================================
+        # OPTIONAL IMAGE MODEL SCORES
+        # ====================================================
+
+        if image_real is not None:
+
+            response[
+                "imageRealProbability"
+            ] = round(
+                image_real * 100,
+                2
+            )
+
+            response[
+                "imageFakeProbability"
+            ] = round(
+                image_fake * 100,
+                2
+            )
+
+
+        return response
 
 
     except Exception as error:
@@ -799,10 +898,8 @@ async def predict_news(
             repr(error)
         )
 
-
         return {
-            "success":
-                False,
+            "success": False,
 
             "message":
                 "Prediction failed",
