@@ -1,4 +1,4 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -268,7 +268,7 @@ const DetectNews = () => {
           <p className="text-slate-400 mt-3 max-w-2xl mx-auto">
 
             Analyze news using BERT-based text features,
-            EfficientNetB0 image features, and multimodal
+            EfficientNet V2 image predictions, and multimodal
             feature fusion.
 
           </p>
@@ -406,7 +406,7 @@ const DetectNews = () => {
 
                 Maximum file size: 5 MB.
                 The selected image is analyzed using
-                EfficientNetB0.
+                EfficientNet V2.
 
               </p>
 
@@ -645,21 +645,21 @@ const DetectNews = () => {
 
                   <p className="text-sm text-slate-400">
 
-                    Text Model: BERT
+                    Text Model: BERT V4 QUInt8
 
                   </p>
 
 
                   <p className="text-sm text-slate-400">
 
-                    Image Model: EfficientNetB0
+                    Image Model: EfficientNet V2
 
                   </p>
 
 
                   <p className="text-sm text-slate-400">
 
-                    Fusion: Feature Concatenation
+                    Fusion: 50/50 Probability Late Fusion
 
                   </p>
 
@@ -701,3 +701,4 @@ const DetectNews = () => {
 
 
 export default DetectNews;
+
