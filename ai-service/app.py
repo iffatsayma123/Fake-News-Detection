@@ -25,7 +25,7 @@ app = FastAPI(
         "Lightweight ONNX multimodal fake news "
         "detection using BERT and EfficientNetB0"
     ),
-    version="3.2.0",
+    version="3.3.0",
 )
 
 
@@ -86,13 +86,13 @@ session_options.enable_cpu_mem_arena = False
 session_options.enable_mem_pattern = False
 
 
-# Suitable for single-user university demo usage
+# Suitable for a lightweight single-user university demo
 session_options.intra_op_num_threads = 1
 
 session_options.inter_op_num_threads = 1
 
 
-# Sequential execution may reduce memory overhead
+# Sequential execution reduces unnecessary memory overhead
 session_options.execution_mode = (
     ort.ExecutionMode.ORT_SEQUENTIAL
 )
@@ -142,7 +142,7 @@ print(
 
 
 # ============================================================
-# 6. LOAD EFFICIENTNET ONNX
+# 6. LOAD QUANTIZED EFFICIENTNET ONNX
 # ============================================================
 
 print(
@@ -180,7 +180,7 @@ print(
 
 
 # ============================================================
-# 8. LOAD LIGHTWEIGHT SCALER
+# 8. LOAD LIGHTWEIGHT NUMPY SCALER
 # ============================================================
 
 print(
@@ -236,38 +236,30 @@ def extract_text_features(
     )
 
 
-    input_ids = encoded[
-        "input_ids"
-    ].astype(
-        np.int64
+    input_ids = (
+        encoded["input_ids"]
+        .astype(np.int64)
     )
 
 
-    attention_mask = encoded[
-        "attention_mask"
-    ].astype(
-        np.int64
+    attention_mask = (
+        encoded["attention_mask"]
+        .astype(np.int64)
     )
 
 
-    if (
-        "token_type_ids"
-        in encoded
-    ):
+    if "token_type_ids" in encoded:
 
-        token_type_ids = encoded[
-            "token_type_ids"
-        ].astype(
-            np.int64
+        token_type_ids = (
+            encoded["token_type_ids"]
+            .astype(np.int64)
         )
 
     else:
 
-        token_type_ids = (
-            np.zeros_like(
-                input_ids,
-                dtype=np.int64
-            )
+        token_type_ids = np.zeros_like(
+            input_ids,
+            dtype=np.int64
         )
 
 
@@ -289,10 +281,11 @@ def extract_text_features(
     )
 
 
-    last_hidden_state = (
-        outputs[0]
-    )
+    last_hidden_state = outputs[0]
 
+
+    # CLS token representation
+    # Shape = (1, 768)
 
     cls_features = (
         last_hidden_state[
@@ -301,11 +294,8 @@ def extract_text_features(
     )
 
 
-    return (
-        cls_features
-        .astype(
-            np.float32
-        )
+    return cls_features.astype(
+        np.float32
     )
 
 
@@ -340,6 +330,11 @@ def extract_image_features(
     )
 
 
+    # Add batch dimension:
+    # (224, 224, 3)
+    # ->
+    # (1, 224, 224, 3)
+
     image_array = np.expand_dims(
         image_array,
         axis=0
@@ -365,11 +360,11 @@ def extract_image_features(
     features = outputs[0]
 
 
-    return (
-        features
-        .astype(
-            np.float32
-        )
+    # Expected shape:
+    # (1, 1280)
+
+    return features.astype(
+        np.float32
     )
 
 
@@ -382,10 +377,13 @@ def root():
 
     return {
         "success": True,
+
         "message":
             "TruthLens AI service is running",
+
         "version":
-            "3.2.0",
+            "3.3.0",
+
         "runtime":
             "ONNX Runtime"
     }
@@ -400,20 +398,32 @@ def health_check():
 
     return {
         "success": True,
+
         "status":
             "healthy",
+
         "models_loaded":
             True,
+
         "runtime":
             "ONNX Runtime",
+
         "text_model":
             "Quantized BERT Encoder",
+
         "image_model":
             "Quantized EfficientNetB0 ONNX",
+
         "fusion":
             "Feature Concatenation + ONNX Classifier",
+
         "scaler":
-            "NumPy"
+            "NumPy",
+
+        "label_mapping": {
+            "0": "Fake",
+            "1": "Real"
+        }
     }
 
 
@@ -433,9 +443,13 @@ async def predict_news(
         # ----------------------------------------------------
         # TEXT INPUT
         # ----------------------------------------------------
-
-        # BERT was trained using Fakeddit clean_title,
-        # so title is used for text inference.
+        #
+        # The BERT model was trained using Fakeddit
+        # clean_title.
+        #
+        # Therefore the current model uses the submitted
+        # news title for text feature extraction.
+        # ----------------------------------------------------
 
         text = newsTitle.strip()
 
@@ -475,7 +489,9 @@ async def predict_news(
         # IMAGE INPUT
         # ----------------------------------------------------
 
-        image_bytes = await image.read()
+        image_bytes = (
+            await image.read()
+        )
 
 
         if not image_bytes:
@@ -488,7 +504,7 @@ async def predict_news(
 
 
         # ----------------------------------------------------
-        # IMAGE FEATURES
+        # EFFICIENTNET FEATURES
         # ----------------------------------------------------
 
         image_features = (
@@ -510,7 +526,17 @@ async def predict_news(
 
 
         # ----------------------------------------------------
-        # MULTIMODAL FEATURE CONCATENATION
+        # FEATURE CONCATENATION
+        # ----------------------------------------------------
+        #
+        # BERT:
+        # 768 features
+        #
+        # EfficientNetB0:
+        # 1280 features
+        #
+        # Total:
+        # 2048 features
         # ----------------------------------------------------
 
         fused_features = np.concatenate(
@@ -534,10 +560,10 @@ async def predict_news(
 
 
         # ----------------------------------------------------
-        # LIGHTWEIGHT STANDARDIZATION
+        # NUMPY STANDARDIZATION
         # ----------------------------------------------------
         #
-        # Equivalent to:
+        # This reproduces:
         #
         # StandardScaler.transform()
         #
@@ -560,7 +586,7 @@ async def predict_news(
 
 
         # ----------------------------------------------------
-        # FUSION CLASSIFIER
+        # FINAL FUSION CLASSIFIER
         # ----------------------------------------------------
 
         fusion_input_name = (
@@ -589,55 +615,127 @@ async def predict_news(
 
 
         # ----------------------------------------------------
-        # LABEL MAPPING
+        # SAFETY CHECK
         # ----------------------------------------------------
+
+        probability = max(
+            0.0,
+            min(
+                1.0,
+                probability
+            )
+        )
+
+
+        # ====================================================
+        # CORRECT FAKEDDIT BINARY LABEL MAPPING
+        # ====================================================
         #
-        # Fakeddit binary labels:
+        # Class 0 = Fake / False
         #
-        # 0 = Real / True
-        # 1 = Fake
+        # Class 1 = Real / True
         #
-        # Sigmoid output represents probability
-        # of Class 1 = Fake.
-        # ----------------------------------------------------
+        # The fusion model uses a single sigmoid output.
+        #
+        # Therefore:
+        #
+        # probability = probability of Class 1
+        #             = probability of REAL
+        #
+        # >= 0.5 -> Real
+        #
+        # < 0.5  -> Fake
+        # ====================================================
+
+
+        real_probability = (
+            probability
+            * 100
+        )
+
+
+        fake_probability = (
+            (1 - probability)
+            * 100
+        )
+
 
         if probability >= 0.5:
 
             predicted_class = 1
 
-            prediction = "Fake"
+            prediction = "Real"
 
             confidence = (
-                probability
-                * 100
+                real_probability
             )
 
         else:
 
             predicted_class = 0
 
-            prediction = "Real"
+            prediction = "Fake"
 
             confidence = (
-                (1 - probability)
-                * 100
+                fake_probability
             )
 
 
-        fake_probability = (
-            probability
-            * 100
+        # ----------------------------------------------------
+        # DEBUG INFORMATION
+        # ----------------------------------------------------
+        #
+        # This prints the raw sigmoid value in the server
+        # terminal. It is useful while we verify the corrected
+        # label mapping.
+        # ----------------------------------------------------
+
+        print("")
+        print(
+            "======================================"
         )
 
-
-        real_probability = (
-            (1 - probability)
-            * 100
+        print(
+            "TruthLens Prediction"
         )
+
+        print(
+            "Raw sigmoid probability:",
+            round(
+                probability,
+                6
+            )
+        )
+
+        print(
+            "Prediction:",
+            prediction
+        )
+
+        print(
+            "Real score:",
+            round(
+                real_probability,
+                2
+            )
+        )
+
+        print(
+            "Fake score:",
+            round(
+                fake_probability,
+                2
+            )
+        )
+
+        print(
+            "======================================"
+        )
+        print("")
 
 
         # ----------------------------------------------------
-        # RESPONSE
+        # API RESPONSE
         # ----------------------------------------------------
 
         return {
@@ -669,6 +767,7 @@ async def predict_news(
                 ),
 
             "models": {
+
                 "text":
                     "Quantized BERT ONNX",
 
@@ -680,6 +779,15 @@ async def predict_news(
 
                 "scaler":
                     "NumPy Standardization"
+            },
+
+            "labelMapping": {
+
+                "0":
+                    "Fake",
+
+                "1":
+                    "Real"
             }
         }
 
