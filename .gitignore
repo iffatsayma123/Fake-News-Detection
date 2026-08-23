@@ -106,3 +106,4 @@ ai-service/memory_test.py
 
 # Backup ONNX model
 ai-service/models_onnx/efficientnet_features_original.onnx
+ai-service/app_old.py
