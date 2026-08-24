@@ -69,7 +69,7 @@ app.get("/", (req, res) => {
 
 /*
 ============================================================
-HEALTH CHECK
+BACKEND HEALTH CHECK
 ============================================================
 */
 
@@ -80,6 +80,178 @@ app.get("/health", (req, res) => {
     service: "TruthLens Backend",
   });
 });
+
+
+/*
+============================================================
+FULL PROJECT WAKE-UP / HEALTH CHECK
+============================================================
+
+This endpoint is called automatically by the frontend.
+
+Flow:
+
+Frontend
+   ↓
+Backend wakes
+   ↓
+Backend calls AI service /health
+   ↓
+AI service wakes
+   ↓
+BERT V4 + EfficientNet V2 load
+
+============================================================
+*/
+
+app.get(
+  "/api/health/full",
+  async (req, res) => {
+
+    let aiStatus = "starting";
+
+    let aiData = null;
+
+
+    try {
+
+      /*
+      --------------------------------------------------------
+      WAKE / CHECK AI SERVICE
+      --------------------------------------------------------
+      */
+
+      const controller =
+        new AbortController();
+
+
+      const timeoutId =
+        setTimeout(
+          () => {
+            controller.abort();
+          },
+          120000
+        );
+
+
+      const aiResponse =
+        await fetch(
+          `${AI_SERVICE_URL}/health`,
+          {
+            method: "GET",
+
+            signal:
+              controller.signal,
+          }
+        );
+
+
+      clearTimeout(
+        timeoutId
+      );
+
+
+      /*
+      --------------------------------------------------------
+      PROCESS AI RESPONSE
+      --------------------------------------------------------
+      */
+
+      if (
+        aiResponse.ok
+      ) {
+
+        aiData =
+          await aiResponse.json();
+
+
+        if (
+          aiData?.status ===
+          "healthy"
+        ) {
+
+          aiStatus =
+            "ready";
+
+        } else {
+
+          aiStatus =
+            "starting";
+        }
+
+      } else {
+
+        aiStatus =
+          "starting";
+      }
+
+
+    } catch (error) {
+
+      /*
+      --------------------------------------------------------
+      FREE RENDER SERVICES MAY STILL BE WAKING
+      --------------------------------------------------------
+
+      Do not crash the backend.
+
+      The frontend can simply retry later.
+      --------------------------------------------------------
+      */
+
+      console.log(
+        "AI wake-up status:",
+        error.message
+      );
+
+
+      aiStatus =
+        "starting";
+    }
+
+
+    /*
+    --------------------------------------------------------
+    RETURN FULL PROJECT STATUS
+    --------------------------------------------------------
+    */
+
+    return res
+      .status(200)
+      .json({
+
+        success:
+          true,
+
+
+        backend:
+          "ready",
+
+
+        ai:
+          aiStatus,
+
+
+        project:
+          aiStatus ===
+          "ready"
+            ? "ready"
+            : "starting",
+
+
+        message:
+          aiStatus ===
+          "ready"
+            ? "TruthLens is ready"
+            : "TruthLens AI service is waking up",
+
+
+        aiDetails:
+          aiData,
+      });
+
+  }
+);
 
 
 /*
@@ -105,12 +277,22 @@ app.use(
 ============================================================
 */
 
-app.use((req, res) => {
-  return res.status(404).json({
-    success: false,
-    message: "Route not found",
-  });
-});
+app.use(
+  (req, res) => {
+
+    return res
+      .status(404)
+      .json({
+
+        success:
+          false,
+
+        message:
+          "Route not found",
+      });
+
+  }
+);
 
 
 /*
@@ -120,6 +302,7 @@ CHECK REQUIRED ENVIRONMENT VARIABLES
 */
 
 if (!MONGO_URI) {
+
   console.error(
     "ERROR: MONGO_URI is missing from environment variables."
   );
@@ -128,7 +311,10 @@ if (!MONGO_URI) {
 }
 
 
-if (!process.env.JWT_SECRET) {
+if (
+  !process.env.JWT_SECRET
+) {
+
   console.error(
     "ERROR: JWT_SECRET is missing from environment variables."
   );
@@ -143,65 +329,71 @@ DATABASE CONNECTION + SERVER START
 ============================================================
 */
 
-const startServer = async () => {
-  try {
+const startServer =
+  async () => {
 
-    /*
-    --------------------------------------------------------
-    CONNECT TO MONGODB
-    --------------------------------------------------------
-    */
+    try {
 
-    await mongoose.connect(
-      MONGO_URI
-    );
+      /*
+      --------------------------------------------------------
+      CONNECT TO MONGODB
+      --------------------------------------------------------
+      */
 
-    console.log(
-      "MongoDB connected successfully"
-    );
+      await mongoose.connect(
+        MONGO_URI
+      );
 
 
-    /*
-    --------------------------------------------------------
-    DISPLAY AI SERVICE
-    --------------------------------------------------------
-    */
-
-    console.log(
-      "AI Service URL:",
-      AI_SERVICE_URL
-    );
+      console.log(
+        "MongoDB connected successfully"
+      );
 
 
-    /*
-    --------------------------------------------------------
-    START EXPRESS SERVER
-    --------------------------------------------------------
-    */
+      /*
+      --------------------------------------------------------
+      DISPLAY AI SERVICE URL
+      --------------------------------------------------------
+      */
 
-    app.listen(
-      PORT,
-      "0.0.0.0",
-      () => {
+      console.log(
+        "AI Service URL:",
+        AI_SERVICE_URL
+      );
 
-        console.log(
-          `TruthLens backend running on port ${PORT}`
-        );
 
-      }
-    );
+      /*
+      --------------------------------------------------------
+      START EXPRESS SERVER
+      --------------------------------------------------------
+      */
 
-  } catch (error) {
+      app.listen(
+        PORT,
+        "0.0.0.0",
+        () => {
 
-    console.error(
-      "Server startup error:",
-      error.message
-    );
+          console.log(
+            `TruthLens backend running on port ${PORT}`
+          );
 
-    process.exit(1);
+        }
+      );
 
-  }
-};
+
+    } catch (error) {
+
+      console.error(
+        "Server startup error:",
+        error.message
+      );
+
+
+      process.exit(1);
+
+    }
+
+  };
 
 
 startServer();

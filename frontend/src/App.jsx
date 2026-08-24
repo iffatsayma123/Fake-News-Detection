@@ -1,4 +1,9 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { useEffect } from "react";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+} from "react-router-dom";
 
 import Home from "./pages/Home";
 import Login from "./pages/Login";
@@ -10,10 +15,38 @@ import Profile from "./pages/Profile";
 
 import ProtectedRoute from "./routes/ProtectedRoute";
 
+import {
+  wakeFullProject,
+} from "./services/api";
+
 
 function App() {
+
+  /*
+  ============================================================
+  AUTOMATIC FULL PROJECT WAKE-UP
+  ============================================================
+
+  When the frontend opens:
+
+  1. Frontend contacts Express backend
+  2. Backend wakes/checks FastAPI AI service
+  3. AI service loads BERT V4 + EfficientNet V2
+
+  This runs once when the app starts.
+  ============================================================
+  */
+
+  useEffect(() => {
+
+    wakeFullProject();
+
+  }, []);
+
+
   return (
     <BrowserRouter>
+
       <Routes>
 
         {/* PUBLIC ROUTES */}
@@ -82,6 +115,7 @@ function App() {
         />
 
       </Routes>
+
     </BrowserRouter>
   );
 }
